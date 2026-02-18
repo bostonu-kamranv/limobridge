@@ -1,4 +1,4 @@
-version: '3.8'
+version: '2.3'  # Compatible with Ubuntu 18.04
 
 services:
   ros1_bridge:
@@ -10,9 +10,8 @@ services:
     environment:
       - ROS_MASTER_URI=http://localhost:11311
       - ROS_IP=127.0.0.1
-    # OPTIONAL: Mount the script if you want to edit code without rebuilding
-    # volumes:
-    #   - ./ros1_bridge/bridge.py:/app/bridge.py
+    # On 18.04/Melodic, we typically don't mount the script for Py2/3 compatibility reasons,
+    # but if you do, make sure the local file is Py2 compatible.
 
   ros2_bridge:
     build: 
@@ -20,13 +19,10 @@ services:
     container_name: bridge_ros2
     network_mode: "host"
     restart: always
-    # CRITICAL: Mount /etc/hostname so the container knows it is "limo-01"
     volumes:
       - /etc/hostname:/etc/hostname:ro
-      # - ./ros2_bridge/bridge.py:/app/bridge.py
     environment:
       - ROS_DOMAIN_ID=0
-      # Force CycloneDDS for better WiFi performance
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-      # CHANGE 'wlan0' to 'wlp2s0' or whatever your LIMO WiFi interface is named
+      # Ensure this matches your WiFi interface (run 'ifconfig' to check)
       - CYCLONEDDS_URI=<CycloneDDS><Domain><General><NetworkInterfaceAddress>wlan0</NetworkInterfaceAddress></General></Domain></CycloneDDS>
