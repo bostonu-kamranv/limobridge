@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  ros1_bridge:
+    build: 
+      context: ./ros1_bridge
+    container_name: bridge_ros1
+    network_mode: "host"
+    restart: always
+    environment:
+      - ROS_MASTER_URI=http://localhost:11311
+      - ROS_IP=127.0.0.1
+    # OPTIONAL: Mount the script if you want to edit code without rebuilding
+    # volumes:
+    #   - ./ros1_bridge/bridge.py:/app/bridge.py
+
+  ros2_bridge:
+    build: 
+      context: ./ros2_bridge
+    container_name: bridge_ros2
+    network_mode: "host"
+    restart: always
+    # CRITICAL: Mount /etc/hostname so the container knows it is "limo-01"
+    volumes:
+      - /etc/hostname:/etc/hostname:ro
+      # - ./ros2_bridge/bridge.py:/app/bridge.py
+    environment:
+      - ROS_DOMAIN_ID=0
+      # Force CycloneDDS for better WiFi performance
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      # CHANGE 'wlan0' to 'wlp2s0' or whatever your LIMO WiFi interface is named
+      - CYCLONEDDS_URI=<CycloneDDS><Domain><General><NetworkInterfaceAddress>wlan0</NetworkInterfaceAddress></General></Domain></CycloneDDS>
