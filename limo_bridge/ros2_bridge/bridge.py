@@ -4,7 +4,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 # Message Types
 from geometry_msgs.msg import Twist
-from sensor_msgs.msg import Imu, LaserScan, CompressedImage, CameraInfo # Added CameraInfo
+from sensor_msgs.msg import Imu, LaserScan, CompressedImage, CameraInfo
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String
 
@@ -31,9 +31,11 @@ class Ros2Bridge(Node):
             '/odom': self.create_publisher(Odometry, f'/{HOSTNAME}/odom', 10),
             '/scan': self.create_publisher(LaserScan, f'/{HOSTNAME}/scan', QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)),
             '/limo_status': self.create_publisher(String, f'/{HOSTNAME}/limo_status', 10),
+            
+            # Updated to match the raw 16-bit depth topic
             '/camera/rgb/image_raw/compressed': self.create_publisher(CompressedImage, f'/{HOSTNAME}/camera/rgb/image_raw/compressed', QoSProfile(depth=2, reliability=ReliabilityPolicy.BEST_EFFORT)),
-            '/camera/depth/image/compressed': self.create_publisher(CompressedImage, f'/{HOSTNAME}/camera/depth/image/compressed', QoSProfile(depth=2, reliability=ReliabilityPolicy.BEST_EFFORT)),
-            # CameraInfo Publishers
+            '/camera/depth/image_raw/compressed': self.create_publisher(CompressedImage, f'/{HOSTNAME}/camera/depth/image_raw/compressed', QoSProfile(depth=2, reliability=ReliabilityPolicy.BEST_EFFORT)),
+            
             '/camera/rgb/camera_info': self.create_publisher(CameraInfo, f'/{HOSTNAME}/camera/rgb/camera_info', 10),
             '/camera/depth/camera_info': self.create_publisher(CameraInfo, f'/{HOSTNAME}/camera/depth/camera_info', 10)
         }
@@ -100,7 +102,8 @@ class Ros2Bridge(Node):
                 msg.data = data["data"]
                 self.ros_pubs['/limo_status'].publish(msg)
 
-            elif topic in ['/camera/rgb/image_raw/compressed', '/camera/depth/image/compressed']:
+            # Updated if-statement for the raw 16-bit depth topic
+            elif topic in ['/camera/rgb/image_raw/compressed', '/camera/depth/image_raw/compressed']:
                 msg = CompressedImage()
                 msg.header.stamp = self.get_clock().now().to_msg()
                 msg.header.frame_id = f"{HOSTNAME}/camera_link"
@@ -116,7 +119,6 @@ class Ros2Bridge(Node):
                 msg.height = data["height"]
                 msg.width = data["width"]
                 msg.distortion_model = data["distortion_model"]
-                # Translate ROS 1 uppercase matrix names to ROS 2 lowercase
                 msg.d = data["D"]
                 msg.k = data["K"]
                 msg.r = data["R"]
