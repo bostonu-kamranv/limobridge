@@ -1,0 +1,10 @@
+[Unit]
+Description=Start LIMO sensor publishing and ROS1-2 Bridge
+After=NetworkManager.service
+
+[Service]
+WorkingDirectory=/home/agilex/limbobridge/limo_bridge
+ExecStart=./startup.sh
+
+[Install]
+WantedBy=default.target
