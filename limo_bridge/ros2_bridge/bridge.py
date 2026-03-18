@@ -30,7 +30,7 @@ class Ros2Bridge(Node):
             '/imu': self.create_publisher(Imu, f'/{HOSTNAME}/imu', 10),
             '/odom': self.create_publisher(Odometry, f'/{HOSTNAME}/odom', 10),
             '/scan': self.create_publisher(LaserScan, f'/{HOSTNAME}/scan', QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)),
-            '/limo_status': self.create_publisher(String, f'/{HOSTNAME}/limo_status', 10),
+            #'/limo_status': self.create_publisher(String, f'/{HOSTNAME}/limo_status', 10),
             
             # Updated to match the raw 16-bit depth topic
             '/camera/rgb/image_raw/compressed': self.create_publisher(CompressedImage, f'/{HOSTNAME}/camera/rgb/image_raw/compressed', QoSProfile(depth=2, reliability=ReliabilityPolicy.BEST_EFFORT)),
@@ -97,10 +97,10 @@ class Ros2Bridge(Node):
                 msg.ranges = data["ranges"]
                 self.ros_pubs['/scan'].publish(msg)
 
-            elif topic == '/limo_status':
-                msg = String()
-                msg.data = data["data"]
-                self.ros_pubs['/limo_status'].publish(msg)
+            #elif topic == '/limo_status':
+            #    msg = String()
+            #    msg.data = data["data"]
+            #    self.ros_pubs['/limo_status'].publish(msg)
 
             # Updated if-statement for the raw 16-bit depth topic
             elif topic in ['/camera/rgb/image_raw/compressed', '/camera/depth/image_raw/compressed']:
