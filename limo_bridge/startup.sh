@@ -61,7 +61,7 @@ retry_with_timeout 30 rostopic list
 
 # Test for ROS core being upp
 
-# roslaunch limo_bringup limo_start.launch &
+roslaunch limo_bringup limo_start.launch &
 # roslaunch astra_camera dabai_u3.launch &
 
 ## Start ROS1-2 Bridge
