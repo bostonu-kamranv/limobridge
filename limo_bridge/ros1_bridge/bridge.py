@@ -5,18 +5,20 @@ import json
 import math
 import base64
 
+
 # Message Types
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Imu, LaserScan, CompressedImage, CameraInfo
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String
+from limo_base.msg import LimoStatus  # <--- Add this line
 
 # Updated to use the raw 16-bit depth topic
 TOPIC_MAP = {
     '/imu': Imu,
     '/odom': Odometry,
     '/scan': LaserScan,
-    '/limo_status': String,
+    '/limo_status': LimoStatus,
     '/camera/rgb/image_raw/compressed': CompressedImage,
     '/camera/depth/image_raw/compressed': CompressedImage, 
     '/camera/rgb/camera_info': CameraInfo,
@@ -77,7 +79,7 @@ class Ros1Bridge:
                     "range_max": msg.range_max
                 }
             elif topic_name == '/limo_status':
-                data = {"data": msg.data}
+                data = {"data": str(msg)}
             elif topic_name in ['/camera/rgb/image_raw/compressed', '/camera/depth/image_raw/compressed']:
                 encoded_data = base64.b64encode(msg.data).decode('ascii')
                 data = {
