@@ -4,16 +4,19 @@ import zmq
 import json
 import math
 import base64
+import sys
 
+# Python 2/3 compatibility for Queue (Melodic vs Noetic)
+if sys.version_info >= (3, 0):
+    from queue import Queue, Full, Empty
+else:
+    from Queue import Queue, Full, Empty
 
 # Message Types
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Imu, LaserScan, CompressedImage, CameraInfo
 from nav_msgs.msg import Odometry
-from std_msgs.msg import String
-#from limo_base.msg import LimoStatus  # ignore status updates for now
 
-# Updated to use the raw 16-bit depth topic
 TOPIC_MAP = {
     '/imu': Imu,
     '/odom': Odometry,
@@ -23,8 +26,6 @@ TOPIC_MAP = {
     '/camera/rgb/camera_info': CameraInfo,
     '/camera/depth/camera_info': CameraInfo
 }
-# can add this back at some point but meh, if there is a problem it should be diagnosed outside of this bridge
-# '/limo_status': LimoStatus, 
 
 class Ros1Bridge:
     def __init__(self):
@@ -36,10 +37,18 @@ class Ros1Bridge:
         
         self.sub = self.ctx.socket(zmq.SUB)
         self.sub.connect("tcp://127.0.0.1:5556")
-        self.sub.setsockopt(zmq.SUBSCRIBE, "") 
+        
+        # PyZMQ string/byte compatibility
+        if sys.version_info >= (3, 0):
+            self.sub.setsockopt(zmq.SUBSCRIBE, b"")
+        else:
+            self.sub.setsockopt(zmq.SUBSCRIBE, "") 
         
         self.poller = zmq.Poller()
         self.poller.register(self.sub, zmq.POLLIN)
+
+        # --- THE FIX: Thread-safe queue to protect the ZMQ socket ---
+        self.send_queue = Queue(maxsize=100)
 
         self.subs = []
         for topic, msg_type in TOPIC_MAP.items():
@@ -79,8 +88,6 @@ class Ros1Bridge:
                     "range_min": msg.range_min,
                     "range_max": msg.range_max
                 }
-            #elif topic_name == '/limo_status':
-            #    data = {"data": str(msg)}
             elif topic_name in ['/camera/rgb/image_raw/compressed', '/camera/depth/image_raw/compressed']:
                 encoded_data = base64.b64encode(msg.data).decode('ascii')
                 data = {
@@ -111,14 +118,24 @@ class Ros1Bridge:
                 "topic": topic_name,
                 "msg": data
             }
-            self.pub.send_json(payload)
+            
+            # Put payload in queue safely. If queue is backed up, drop old frames to prevent lag.
+            try:
+                self.send_queue.put_nowait(payload)
+            except Full:
+                try:
+                    self.send_queue.get_nowait() # pop oldest
+                    self.send_queue.put_nowait(payload) # insert newest
+                except Empty:
+                    pass
             
         except Exception as e:
             rospy.logerr_throttle(1, "Serialization Error on {}: {}".format(topic_name, e))
 
     def run(self):
-        rate = rospy.Rate(50)
+        rate = rospy.Rate(100) # Increased rate to flush the queue quickly
         while not rospy.is_shutdown():
+            # 1. Handle Incoming ZMQ Commands (Laptop -> LIMO)
             socks = dict(self.poller.poll(0))
             if self.sub in socks:
                 try:
@@ -130,6 +147,15 @@ class Ros1Bridge:
                         self.cmd_pub.publish(t)
                 except Exception as e:
                     rospy.logerr("ZMQ Recv Error: {}".format(e))
+            
+            # 2. Handle Outgoing ZMQ Data (LIMO -> Laptop)
+            while not self.send_queue.empty():
+                try:
+                    payload = self.send_queue.get_nowait()
+                    self.pub.send_json(payload)
+                except Exception as e:
+                    pass
+
             rate.sleep()
 
 if __name__ == "__main__":
