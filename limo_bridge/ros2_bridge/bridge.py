@@ -6,7 +6,6 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Imu, LaserScan, CompressedImage, CameraInfo
 from nav_msgs.msg import Odometry
-from std_msgs.msg import String
 
 import zmq
 import json
@@ -27,7 +26,7 @@ class Ros2Bridge(Node):
         self.sub.connect("tcp://127.0.0.1:5555") 
         self.sub.setsockopt_string(zmq.SUBSCRIBE, "")
         
-        # Keep the High Water Mark to prevent infinite backlogs
+        # PREVENT BACKLOG: Drop old messages if the CPU/Network gets overwhelmed
         self.sub.setsockopt(zmq.RCVHWM, 5)
 
         self.ros_pubs = {
@@ -42,12 +41,9 @@ class Ros2Bridge(Node):
             '/camera/depth/camera_info': self.create_publisher(CameraInfo, f'/{HOSTNAME}/camera/depth/camera_info', 10)
         }
 
-        # DIAGNOSTIC: Dictionary to track message counts per topic
-        self.frame_counters = {}
-
         self.create_subscription(Twist, f'/{HOSTNAME}/cmd_vel', self.cmd_cb, 10)
         self.create_timer(0.01, self.zmq_poll)
-        self.get_logger().info(f"Diagnostic Bridge Active for /{HOSTNAME}")
+        self.get_logger().info(f"Bridge Active for /{HOSTNAME}")
 
     def cmd_cb(self, msg):
         payload = {
@@ -60,31 +56,12 @@ class Ros2Bridge(Node):
         self.pub.send_string(json.dumps(payload))
 
     def zmq_poll(self):
+        # DRAIN THE QUEUE: Process all pending messages in the ZMQ buffer instantly
         while True:
             try:
                 msg_str = self.sub.recv_string(flags=zmq.NOBLOCK)
                 packet = json.loads(msg_str)
                 topic = packet["topic"]
-                
-                # --- DIAGNOSTIC FILTERING ---
-                # Initialize the counter if it's a new topic
-                if topic not in self.frame_counters:
-                    self.frame_counters[topic] = 0
-                
-                self.frame_counters[topic] += 1
-                
-                # Define the topics that cause lag
-                heavy_topics = [
-                    '/scan', 
-                    '/camera/rgb/image_raw/compressed', 
-                    '/camera/depth/image_raw/compressed'
-                ]
-                
-                # If it's a heavy topic and NOT the 10th frame, skip it immediately
-                if topic in heavy_topics and self.frame_counters[topic] % 10 != 0:
-                    continue 
-                # ----------------------------
-
                 data = packet["msg"]
 
                 if topic == '/imu':
@@ -128,7 +105,6 @@ class Ros2Bridge(Node):
                     msg.header.stamp = self.get_clock().now().to_msg()
                     msg.header.frame_id = f"{HOSTNAME}/camera_link"
                     msg.format = data["format"]
-                    # This step below is computationally heavy. Skipping it saves CPU.
                     msg.data = base64.b64decode(data["data"])
                     self.ros_pubs[topic].publish(msg)
 
@@ -155,7 +131,7 @@ class Ros2Bridge(Node):
                     self.ros_pubs[topic].publish(msg)
 
             except zmq.Again:
-                break 
+                break # Buffer is empty, break out of the while loop until the next timer tick
             except KeyError as e:
                 pass 
             except Exception as e:
