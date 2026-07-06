@@ -47,8 +47,10 @@ class Ros1Bridge:
         self.poller = zmq.Poller()
         self.poller.register(self.sub, zmq.POLLIN)
 
-        # --- THE FIX: Thread-safe queue to protect the ZMQ socket ---
         self.send_queue = Queue(maxsize=100)
+        
+        # --- THE FIX: Track frames to throttle at the source ---
+        self.frame_counters = {}
 
         self.subs = []
         for topic, msg_type in TOPIC_MAP.items():
@@ -59,6 +61,23 @@ class Ros1Bridge:
         rospy.loginfo("Bridge Initialized. Listening for: {}".format(TOPIC_MAP.keys()))
 
     def generic_callback(self, msg, topic_name):
+        # --- THROTTLE LOGIC: Drop 9 out of 10 heavy frames BEFORE processing ---
+        if topic_name not in self.frame_counters:
+            self.frame_counters[topic_name] = 0
+            
+        heavy_topics = [
+            '/scan', 
+            '/camera/rgb/image_raw/compressed', 
+            '/camera/depth/image_raw/compressed'
+        ]
+
+        if topic_name in heavy_topics:
+            self.frame_counters[topic_name] += 1
+            # If it is not the 10th frame, exit immediately to save CPU
+            if self.frame_counters[topic_name] % 10 != 0:
+                return 
+        # -----------------------------------------------------------------------
+
         try:
             data = {}
             
@@ -119,13 +138,12 @@ class Ros1Bridge:
                 "msg": data
             }
             
-            # Put payload in queue safely. If queue is backed up, drop old frames to prevent lag.
             try:
                 self.send_queue.put_nowait(payload)
             except Full:
                 try:
-                    self.send_queue.get_nowait() # pop oldest
-                    self.send_queue.put_nowait(payload) # insert newest
+                    self.send_queue.get_nowait() 
+                    self.send_queue.put_nowait(payload) 
                 except Empty:
                     pass
             
@@ -133,9 +151,8 @@ class Ros1Bridge:
             rospy.logerr_throttle(1, "Serialization Error on {}: {}".format(topic_name, e))
 
     def run(self):
-        rate = rospy.Rate(100) # Increased rate to flush the queue quickly
+        rate = rospy.Rate(100) 
         while not rospy.is_shutdown():
-            # 1. Handle Incoming ZMQ Commands (Laptop -> LIMO)
             socks = dict(self.poller.poll(0))
             if self.sub in socks:
                 try:
@@ -148,7 +165,6 @@ class Ros1Bridge:
                 except Exception as e:
                     rospy.logerr("ZMQ Recv Error: {}".format(e))
             
-            # 2. Handle Outgoing ZMQ Data (LIMO -> Laptop)
             while not self.send_queue.empty():
                 try:
                     payload = self.send_queue.get_nowait()
