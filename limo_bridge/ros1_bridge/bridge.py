@@ -74,7 +74,7 @@ class Ros1Bridge:
         if topic_name in heavy_topics:
             self.frame_counters[topic_name] += 1
             # If it is not the 10th frame, exit immediately to save CPU
-            if self.frame_counters[topic_name] % 10 != 0:
+            if self.frame_counters[topic_name] % 3 != 0: # should be 10 Hz update rate with this
                 return 
         # -----------------------------------------------------------------------
 
