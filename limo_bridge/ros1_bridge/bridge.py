@@ -16,6 +16,7 @@ else:
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Imu, LaserScan, CompressedImage, CameraInfo
 from nav_msgs.msg import Odometry
+from tf2_msgs.msg import TFMessage  # <-- Added for TF
 
 TOPIC_MAP = {
     '/imu': Imu,
@@ -24,7 +25,9 @@ TOPIC_MAP = {
     '/camera/rgb/image_raw/compressed': CompressedImage,
     '/camera/depth/image_raw/compressed': CompressedImage, 
     '/camera/rgb/camera_info': CameraInfo,
-    '/camera/depth/camera_info': CameraInfo
+    '/camera/depth/camera_info': CameraInfo,
+    '/tf': TFMessage,          # <-- Added
+    '/tf_static': TFMessage    # <-- Added
 }
 
 class Ros1Bridge:
@@ -47,9 +50,8 @@ class Ros1Bridge:
         self.poller = zmq.Poller()
         self.poller.register(self.sub, zmq.POLLIN)
 
-        self.send_queue = Queue(maxsize=100)
+        self.send_queue = Queue(maxsize=200) # Increased slightly to accommodate TF bursts
         
-        # --- THE FIX: Track frames to throttle at the source ---
         self.frame_counters = {}
 
         self.subs = []
@@ -61,7 +63,6 @@ class Ros1Bridge:
         rospy.loginfo("Bridge Initialized. Listening for: {}".format(TOPIC_MAP.keys()))
 
     def generic_callback(self, msg, topic_name):
-        # --- THROTTLE LOGIC: Drop 9 out of 10 heavy frames BEFORE processing ---
         if topic_name not in self.frame_counters:
             self.frame_counters[topic_name] = 0
             
@@ -73,10 +74,8 @@ class Ros1Bridge:
 
         if topic_name in heavy_topics:
             self.frame_counters[topic_name] += 1
-            # If it is not the 10th frame, exit immediately to save CPU
-            if self.frame_counters[topic_name] % 3 != 0: # should be 10 Hz update rate with this
+            if self.frame_counters[topic_name] % 3 != 0: 
                 return 
-        # -----------------------------------------------------------------------
 
         try:
             data = {}
@@ -92,6 +91,18 @@ class Ros1Bridge:
                     "pos": {"x": msg.pose.pose.position.x, "y": msg.pose.pose.position.y},
                     "twist": {"linear": msg.twist.twist.linear.x, "angular": msg.twist.twist.angular.z}
                 }
+            elif topic_name in ['/tf', '/tf_static']:
+                transforms_data = []
+                for tf in msg.transforms:
+                    transforms_data.append({
+                        "header": {
+                            "frame_id": tf.header.frame_id
+                        },
+                        "child_frame_id": tf.child_frame_id,
+                        "translation": {"x": tf.transform.translation.x, "y": tf.transform.translation.y, "z": tf.transform.translation.z},
+                        "rotation": {"x": tf.transform.rotation.x, "y": tf.transform.rotation.y, "z": tf.transform.rotation.z, "w": tf.transform.rotation.w}
+                    })
+                data = {"transforms": transforms_data}
             elif topic_name == '/scan':
                 clean_ranges = []
                 max_r = msg.range_max
