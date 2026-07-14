@@ -1,12 +1,12 @@
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
 # Message Types
 from geometry_msgs.msg import Twist, TransformStamped
 from sensor_msgs.msg import Imu, LaserScan, CompressedImage, CameraInfo
 from nav_msgs.msg import Odometry
-from tf2_ros import TransformBroadcaster, StaticTransformBroadcaster # <-- Added for TF
+from tf2_msgs.msg import TFMessage  # <-- Direct publishing for namespaced TF
 
 import zmq
 import json
@@ -29,11 +29,17 @@ class Ros2Bridge(Node):
         
         self.sub.setsockopt(zmq.RCVHWM, 10) # Bumped slightly for TF bursts
 
-        # Initialize TF Broadcasters (handles proper QoS automatically)
-        self.tf_broadcaster = TransformBroadcaster(self)
-        self.tf_static_broadcaster = StaticTransformBroadcaster(self)
+        # Configure static TF QoS to latch messages for late subscribers
+        static_tf_qos = QoSProfile(
+            depth=100,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE
+        )
 
         self.ros_pubs = {
+            '/tf': self.create_publisher(TFMessage, f'/{HOSTNAME}/tf', 100),
+            '/tf_static': self.create_publisher(TFMessage, f'/{HOSTNAME}/tf_static', static_tf_qos),
+            
             '/imu': self.create_publisher(Imu, f'/{HOSTNAME}/imu', 10),
             '/odom': self.create_publisher(Odometry, f'/{HOSTNAME}/odom', 10),
             '/scan': self.create_publisher(LaserScan, f'/{HOSTNAME}/scan', QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)),
@@ -60,9 +66,10 @@ class Ros2Bridge(Node):
         self.pub.send_string(json.dumps(payload))
 
     def format_frame_id(self, frame_id):
-        """Helper to prefix TF frames with HOSTNAME without breaking root frames."""
+        """Helper to prefix TF frames with HOSTNAME. Only 'map' remains global."""
         clean_frame = frame_id.lstrip('/')
-        if clean_frame in ['map', 'odom'] or clean_frame.startswith(HOSTNAME):
+        # 'map' stays global; 'odom' and sensor links get namespaced per robot
+        if clean_frame == 'map' or clean_frame.startswith(HOSTNAME):
             return clean_frame
         return f"{HOSTNAME}/{clean_frame}"
 
@@ -82,7 +89,6 @@ class Ros2Bridge(Node):
                         t = TransformStamped()
                         t.header.stamp = current_time
                         
-                        # Apply HOSTNAME namespace logic to align with sensor frames
                         t.header.frame_id = self.format_frame_id(tf_data["header"]["frame_id"])
                         t.child_frame_id = self.format_frame_id(tf_data["child_frame_id"])
                         
@@ -95,10 +101,9 @@ class Ros2Bridge(Node):
                         t.transform.rotation.w = tf_data["rotation"]["w"]
                         tfs.append(t)
                         
-                    if topic == '/tf':
-                        self.tf_broadcaster.sendTransform(tfs)
-                    else:
-                        self.tf_static_broadcaster.sendTransform(tfs)
+                    tf_msg = TFMessage()
+                    tf_msg.transforms = tfs
+                    self.ros_pubs[topic].publish(tf_msg)
 
                 elif topic == '/imu':
                     msg = Imu()
@@ -119,7 +124,8 @@ class Ros2Bridge(Node):
                 elif topic == '/odom':
                     msg = Odometry()
                     msg.header.stamp = current_time
-                    msg.header.frame_id = "odom"
+                    # Updated to ensure the odometry message frame matches the TF tree!
+                    msg.header.frame_id = f"{HOSTNAME}/odom"
                     msg.child_frame_id = f"{HOSTNAME}/base_link"
                     msg.pose.pose.position.x = data["pos"]["x"]
                     msg.pose.pose.position.y = data["pos"]["y"]
