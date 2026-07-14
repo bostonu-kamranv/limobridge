@@ -3,9 +3,10 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 # Message Types
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, TransformStamped
 from sensor_msgs.msg import Imu, LaserScan, CompressedImage, CameraInfo
 from nav_msgs.msg import Odometry
+from tf2_ros import TransformBroadcaster, StaticTransformBroadcaster # <-- Added for TF
 
 import zmq
 import json
@@ -26,8 +27,11 @@ class Ros2Bridge(Node):
         self.sub.connect("tcp://127.0.0.1:5555") 
         self.sub.setsockopt_string(zmq.SUBSCRIBE, "")
         
-        # PREVENT BACKLOG: Drop old messages if the CPU/Network gets overwhelmed
-        self.sub.setsockopt(zmq.RCVHWM, 5)
+        self.sub.setsockopt(zmq.RCVHWM, 10) # Bumped slightly for TF bursts
+
+        # Initialize TF Broadcasters (handles proper QoS automatically)
+        self.tf_broadcaster = TransformBroadcaster(self)
+        self.tf_static_broadcaster = StaticTransformBroadcaster(self)
 
         self.ros_pubs = {
             '/imu': self.create_publisher(Imu, f'/{HOSTNAME}/imu', 10),
@@ -55,8 +59,14 @@ class Ros2Bridge(Node):
         }
         self.pub.send_string(json.dumps(payload))
 
+    def format_frame_id(self, frame_id):
+        """Helper to prefix TF frames with HOSTNAME without breaking root frames."""
+        clean_frame = frame_id.lstrip('/')
+        if clean_frame in ['map', 'odom'] or clean_frame.startswith(HOSTNAME):
+            return clean_frame
+        return f"{HOSTNAME}/{clean_frame}"
+
     def zmq_poll(self):
-        # DRAIN THE QUEUE: Process all pending messages in the ZMQ buffer instantly
         while True:
             try:
                 msg_str = self.sub.recv_string(flags=zmq.NOBLOCK)
@@ -64,9 +74,35 @@ class Ros2Bridge(Node):
                 topic = packet["topic"]
                 data = packet["msg"]
 
-                if topic == '/imu':
+                current_time = self.get_clock().now().to_msg()
+
+                if topic in ['/tf', '/tf_static']:
+                    tfs = []
+                    for tf_data in data["transforms"]:
+                        t = TransformStamped()
+                        t.header.stamp = current_time
+                        
+                        # Apply HOSTNAME namespace logic to align with sensor frames
+                        t.header.frame_id = self.format_frame_id(tf_data["header"]["frame_id"])
+                        t.child_frame_id = self.format_frame_id(tf_data["child_frame_id"])
+                        
+                        t.transform.translation.x = tf_data["translation"]["x"]
+                        t.transform.translation.y = tf_data["translation"]["y"]
+                        t.transform.translation.z = tf_data["translation"]["z"]
+                        t.transform.rotation.x = tf_data["rotation"]["x"]
+                        t.transform.rotation.y = tf_data["rotation"]["y"]
+                        t.transform.rotation.z = tf_data["rotation"]["z"]
+                        t.transform.rotation.w = tf_data["rotation"]["w"]
+                        tfs.append(t)
+                        
+                    if topic == '/tf':
+                        self.tf_broadcaster.sendTransform(tfs)
+                    else:
+                        self.tf_static_broadcaster.sendTransform(tfs)
+
+                elif topic == '/imu':
                     msg = Imu()
-                    msg.header.stamp = self.get_clock().now().to_msg()
+                    msg.header.stamp = current_time
                     msg.header.frame_id = f"{HOSTNAME}/imu_link"
                     msg.orientation.x = data["or"]["x"]
                     msg.orientation.y = data["or"]["y"]
@@ -76,11 +112,13 @@ class Ros2Bridge(Node):
                     msg.angular_velocity.y = data["av"]["y"]
                     msg.angular_velocity.z = data["av"]["z"]
                     msg.linear_acceleration.x = data["la"]["x"]
+                    msg.linear_acceleration.y = data["la"]["y"]
+                    msg.linear_acceleration.z = data["la"]["z"]
                     self.ros_pubs['/imu'].publish(msg)
 
                 elif topic == '/odom':
                     msg = Odometry()
-                    msg.header.stamp = self.get_clock().now().to_msg()
+                    msg.header.stamp = current_time
                     msg.header.frame_id = "odom"
                     msg.child_frame_id = f"{HOSTNAME}/base_link"
                     msg.pose.pose.position.x = data["pos"]["x"]
@@ -91,7 +129,7 @@ class Ros2Bridge(Node):
 
                 elif topic == '/scan':
                     msg = LaserScan()
-                    msg.header.stamp = self.get_clock().now().to_msg()
+                    msg.header.stamp = current_time
                     msg.header.frame_id = f"{HOSTNAME}/laser_link"
                     msg.angle_min = data["angle_min"]
                     msg.angle_increment = data["angle_increment"]
@@ -102,7 +140,7 @@ class Ros2Bridge(Node):
 
                 elif topic in ['/camera/rgb/image_raw/compressed', '/camera/depth/image_raw/compressed']:
                     msg = CompressedImage()
-                    msg.header.stamp = self.get_clock().now().to_msg()
+                    msg.header.stamp = current_time
                     msg.header.frame_id = f"{HOSTNAME}/camera_link"
                     msg.format = data["format"]
                     msg.data = base64.b64decode(data["data"])
@@ -110,7 +148,7 @@ class Ros2Bridge(Node):
 
                 elif topic in ['/camera/rgb/camera_info', '/camera/depth/camera_info']:
                     msg = CameraInfo()
-                    msg.header.stamp = self.get_clock().now().to_msg()
+                    msg.header.stamp = current_time
                     msg.header.frame_id = f"{HOSTNAME}/camera_link"
                     
                     msg.height = data["height"]
@@ -131,7 +169,7 @@ class Ros2Bridge(Node):
                     self.ros_pubs[topic].publish(msg)
 
             except zmq.Again:
-                break # Buffer is empty, break out of the while loop until the next timer tick
+                break 
             except KeyError as e:
                 pass 
             except Exception as e:
