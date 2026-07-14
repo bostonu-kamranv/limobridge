@@ -3,7 +3,7 @@ FROM ros:melodic-ros-base
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install Python 2 dependencies
+# Install Python 2 dependencies and required ROS message packages
 RUN apt-get update && apt-get install -y \
     python-pip \
     python-dev \
@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y \
     ros-melodic-geometry-msgs \
     ros-melodic-sensor-msgs \
     ros-melodic-nav-msgs \
+    ros-melodic-tf2-msgs \
+    ros-melodic-tf \
     && rm -rf /var/lib/apt/lists/*
 
 # Install pyzmq for Python 2
